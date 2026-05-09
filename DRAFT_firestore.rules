@@ -1,0 +1,79 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Common Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // User Profile Validation
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'bloodGroup']) &&
+             data.uid == request.auth.uid &&
+             data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] &&
+             (data.get('phone', '') is string && data.get('phone', '').size() <= 20) &&
+             (data.get('displayName', '') is string && data.get('displayName', '').size() <= 100);
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn(); // Limit by blood group or location in queries
+      
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().createdAt == request.time;
+      
+      allow update: if isOwner(userId) && isValidUser(incoming()) &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().updatedAt == request.time &&
+                    (
+                      // Action: Update Medical Info or Availability
+                      incoming().diff(existing()).affectedKeys().hasAny(['bloodGroup', 'lastDonationDate', 'isAvailable', 'phone', 'location', 'displayName', 'updatedAt'])
+                    );
+    }
+
+    // Blood Request Validation
+    function isValidRequest(data) {
+      return data.keys().hasAll(['hospitalName', 'bloodGroup', 'urgency', 'requesterId']) &&
+             data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] &&
+             data.urgency in ['Critical', 'Urgent', 'Standard'] &&
+             data.requesterId == request.auth.uid &&
+             data.hospitalName is string && data.hospitalName.size() <= 200;
+    }
+
+    match /requests/{requestId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(requestId) && isValidRequest(incoming()) && incoming().createdAt == request.time;
+      
+      allow update: if isSignedIn() && (
+        // Requester updates their own request
+        (isOwner(existing().requesterId) && isValidRequest(incoming()) &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'hospitalName', 'bloodGroup', 'urgency', 'unitsNeeded', 'location', 'updatedAt'])) ||
+        // Donor marks status or accepts (adding themselves to acceptedBy)
+        (incoming().diff(existing()).affectedKeys().hasOnly(['acceptedBy', 'updatedAt']))
+      );
+      
+      allow delete: if isOwner(existing().requesterId);
+    }
+  }
+}

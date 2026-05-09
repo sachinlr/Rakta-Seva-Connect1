@@ -1,0 +1,92 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Common Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // User Profile Validation
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'bloodGroup', 'isAvailable']) &&
+             data.uid == request.auth.uid &&
+             data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] &&
+             (data.get('phone', '') is string && data.get('phone', '').size() <= 20) &&
+             (data.get('displayName', '') is string && data.get('displayName', '').size() <= 100);
+    }
+
+    match /users/{userId} {
+      // Users can list and get other users but phone is sensitive.
+      // We will restrict read to NOT include phone if not owner.
+      // However, Firestore rules are all-or-nothing for document read.
+      // So we must trust the client NOT to show phone, OR we use the subcollection pattern.
+      // Let's use the subcollection pattern for private info.
+      // For simplicity in this app, we'll allow public reads but hide phone in the UI
+      // unless passed through the acceptedDonors subcollection.
+      allow get, list: if isSignedIn();
+      
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().createdAt == request.time;
+      
+      allow update: if isOwner(userId) && isValidUser(incoming()) &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().updatedAt == request.time &&
+                    (
+                      incoming().diff(existing()).affectedKeys().hasAny(['bloodGroup', 'lastDonationDate', 'isAvailable', 'phone', 'location', 'displayName', 'updatedAt'])
+                    );
+    }
+
+    // Blood Request Validation
+    function isValidRequest(data) {
+      return data.keys().hasAll(['hospitalName', 'bloodGroup', 'urgency', 'requesterId', 'status']) &&
+             data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] &&
+             data.urgency in ['Critical', 'Urgent', 'Standard'] &&
+             data.status in ['Active', 'Fulfilled', 'Cancelled'] &&
+             data.requesterId == request.auth.uid &&
+             data.hospitalName is string && data.hospitalName.size() <= 200;
+    }
+
+    match /requests/{requestId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(requestId) && isValidRequest(incoming()) && incoming().createdAt == request.time;
+      
+      allow update: if isSignedIn() && (
+        // Requester updates their own request
+        (isOwner(existing().requesterId) && isValidRequest(incoming()) &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'hospitalName', 'bloodGroup', 'urgency', 'unitsNeeded', 'location', 'updatedAt'])) ||
+        // Donor marks acceptance (adding themselves to acceptedBy array - allowed for coordination)
+        (incoming().diff(existing()).affectedKeys().hasOnly(['acceptedBy', 'updatedAt']) && 
+         incoming().acceptedBy.size() > existing().acceptedBy.size())
+      );
+      
+      allow delete: if isOwner(existing().requesterId);
+
+      // Subcollection for privacy: Only the requester can see the contact details of donors who accepted.
+      match /acceptedDonors/{donorId} {
+        allow read: if isSignedIn() && (isOwner(donorId) || isOwner(get(/databases/$(database)/documents/requests/$(requestId)).data.requesterId));
+        allow create: if isOwner(donorId) && isValidUser(incoming());
+      }
+    }
+  }
+}

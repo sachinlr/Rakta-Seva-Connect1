@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Blood donor profile with medical info and location.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "bloodGroup": { "type": "string", "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] },
+        "lastDonationDate": { "type": "string", "format": "date-time" },
+        "isAvailable": { "type": "boolean" },
+        "phone": { "type": "string" },
+        "location": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" },
+            "geohash": { "type": "string" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "bloodGroup"]
+    },
+    "BloodRequest": {
+      "title": "Emergency Blood Request",
+      "description": "Broadcasted request for a specific blood group in an area.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "hospitalName": { "type": "string" },
+        "bloodGroup": { "type": "string", "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] },
+        "urgency": { "type": "string", "enum": ["Critical", "Urgent", "Standard"] },
+        "unitsNeeded": { "type": "number" },
+        "location": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" },
+            "address": { "type": "string" }
+          }
+        },
+        "status": { "type": "string", "enum": ["Active", "Fulfilled", "Cancelled"] },
+        "requesterId": { "type": "string" },
+        "requesterPhone": { "type": "string" },
+        "acceptedBy": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["hospitalName", "bloodGroup", "urgency", "requesterId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Stores user profile and donor status."
+    },
+    "/requests/{requestId}": {
+      "schema": "BloodRequest",
+      "description": "Stores blood requirement requests."
+    },
+    "/requests/{requestId}/acceptedDonors/{userId}": {
+      "schema": "User",
+      "description": "Stores info of donors who accepted this request."
+    }
+  }
+}
